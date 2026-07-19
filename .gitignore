@@ -1,3 +1,10 @@
 .commits/
 .devlog/
 devlog.md
+
+__pycache__
+.venv
+
+.pytest_cache/
+
+checkpoints/

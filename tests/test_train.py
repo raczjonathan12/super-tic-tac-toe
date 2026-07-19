@@ -1,6 +1,6 @@
 import numpy as np
 from network import build_network
-from train import training_step, training_loop
+from train import training_step, training_loop, save_replay_buffer, load_replay_buffer
 
 
 def test_training_step_reduces_loss_on_fixed_batch():
@@ -85,3 +85,73 @@ def test_training_loop_can_resume_from_a_checkpoint_without_overwriting_it(tmp_p
 
     content = log_path.read_text()
     assert "iteration 1" in content
+
+
+def test_save_and_load_replay_buffer_roundtrip(tmp_path):
+    rng = np.random.default_rng(0)
+    original = [
+        (
+            rng.random((9, 3, 3, 2)).astype(np.float32),
+            rng.random((9, 4)).astype(np.float32),
+            rng.integers(0, 2, size=(9,)).astype(np.float32),
+            rng.dirichlet(np.ones(81)).astype(np.float32),
+            float(rng.uniform(-1, 1)),
+        )
+        for _ in range(10)
+    ]
+    path = tmp_path / "replay_buffer.pkl"
+
+    save_replay_buffer(original, str(path))
+    loaded = load_replay_buffer(str(path), maxlen=100)
+
+    assert len(loaded) == len(original)
+    for (b1, s1, l1, p1, v1), (b2, s2, l2, p2, v2) in zip(original, loaded):
+        assert np.array_equal(b1, b2)
+        assert np.array_equal(s1, s2)
+        assert np.array_equal(l1, l2)
+        assert np.array_equal(p1, p2)
+        assert v1 == v2
+
+
+def test_training_loop_resume_preserves_replay_buffer_contents(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    log_path = tmp_path / "training_log.txt"
+    replay_buffer_path = tmp_path / "replay_buffer.pkl"
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+        replay_buffer_path=str(replay_buffer_path),
+    )
+    first_run_checkpoint = checkpoint_dir / "model_iter0.keras"
+    assert replay_buffer_path.exists()
+    buffer_after_first_run = load_replay_buffer(str(replay_buffer_path), maxlen=100000)
+    size_after_first_run = len(buffer_after_first_run)
+    assert size_after_first_run > 0
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+        replay_buffer_path=str(replay_buffer_path),
+        resume_from=str(first_run_checkpoint),
+        start_iteration=1,
+    )
+
+    content = log_path.read_text()
+    assert f"resumed replay buffer from {replay_buffer_path}" in content
+    # the resumed run's buffer must have started from what the first run left
+    # behind (plus whatever the resumed run's own self-play added), not 0
+    buffer_after_resume = load_replay_buffer(str(replay_buffer_path), maxlen=100000)
+    assert len(buffer_after_resume) > size_after_first_run

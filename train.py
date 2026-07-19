@@ -1,10 +1,22 @@
 import random
+import pickle
 from collections import deque
 import numpy as np
 
 from network import build_network
 from self_play import play_self_play_batch
 from evaluate import evaluate_vs_opponent
+
+
+def save_replay_buffer(replay_buffer, path):
+    with open(path, "wb") as f:
+        pickle.dump(list(replay_buffer), f)
+
+
+def load_replay_buffer(path, maxlen):
+    with open(path, "rb") as f:
+        examples = pickle.load(f)
+    return deque(examples, maxlen=maxlen)
 
 
 def training_step(model, batch):
@@ -26,12 +38,15 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
                    train_steps_per_iteration, replay_maxlen=20000,
                    checkpoint_dir="./checkpoints", eval_games=10,
                    log_path="./training_log.txt", self_play_chunk_size=5,
-                   log_every_train_steps=25, resume_from=None, start_iteration=0):
+                   log_every_train_steps=25, resume_from=None, start_iteration=0,
+                   replay_buffer_path=None):
     import os
     import time
     from tensorflow import keras
 
     os.makedirs(checkpoint_dir, exist_ok=True)
+    if replay_buffer_path is None:
+        replay_buffer_path = f"{checkpoint_dir}/replay_buffer.pkl"
     log_file = open(log_path, "a")
 
     def log(message):
@@ -42,9 +57,15 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
     if resume_from is not None:
         model = keras.models.load_model(resume_from)
         log(f"resuming from {resume_from} at iteration {start_iteration}")
+        if os.path.exists(replay_buffer_path):
+            replay_buffer = load_replay_buffer(replay_buffer_path, replay_maxlen)
+            log(f"resumed replay buffer from {replay_buffer_path}, {len(replay_buffer)} examples")
+        else:
+            replay_buffer = deque(maxlen=replay_maxlen)
+            log(f"no replay buffer found at {replay_buffer_path}, starting empty")
     else:
         model = build_network()
-    replay_buffer = deque(maxlen=replay_maxlen)
+        replay_buffer = deque(maxlen=replay_maxlen)
     start_time = time.time()
 
     for offset in range(num_iterations):
@@ -74,7 +95,8 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
         log(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
 
         model.save(f"{checkpoint_dir}/model_iter{iteration}.keras")
-        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — checkpoint saved, starting evaluation")
+        save_replay_buffer(replay_buffer, replay_buffer_path)
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — checkpoint and replay buffer saved, starting evaluation")
 
         vs_random = evaluate_vs_opponent(model, num_simulations, "random", eval_games)
         log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — vs random: {vs_random}")

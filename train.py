@@ -61,11 +61,10 @@ if __name__ == "__main__":
     # Real training run, scaled up from the validated short config.
     # num_simulations=100 (4x the validation run) gives MCTS meaningfully
     # more search depth for both self-play data quality and evaluation
-    # accuracy, at ~4x the per-game cost. games_per_iteration=20 and
-    # num_iterations=50 target a total runtime in the same few-hour range
-    # as the earlier DQN runs, not open-ended.
+    # accuracy, at ~4x the per-game cost. num_iterations=15 targets a
+    # ~2-2.5 hour total runtime at ~8.5 min/iteration.
     training_loop(
-        num_iterations=50,
+        num_iterations=15,
         games_per_iteration=20,
         num_simulations=100,
         batch_size=64,

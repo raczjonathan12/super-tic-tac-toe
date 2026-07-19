@@ -39,7 +39,7 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
                    checkpoint_dir="./checkpoints", eval_games=10,
                    log_path="./training_log.txt", self_play_chunk_size=5,
                    log_every_train_steps=25, resume_from=None, start_iteration=0,
-                   replay_buffer_path=None):
+                   replay_buffer_path=None, latest_model_path=None):
     import os
     import time
     from tensorflow import keras
@@ -47,6 +47,8 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
     os.makedirs(checkpoint_dir, exist_ok=True)
     if replay_buffer_path is None:
         replay_buffer_path = f"{checkpoint_dir}/replay_buffer.pkl"
+    if latest_model_path is None:
+        latest_model_path = "./final_model.keras"
     log_file = open(log_path, "a")
 
     def log(message):
@@ -95,8 +97,9 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
         log(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
 
         model.save(f"{checkpoint_dir}/model_iter{iteration}.keras")
+        model.save(latest_model_path)
         save_replay_buffer(replay_buffer, replay_buffer_path)
-        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — checkpoint and replay buffer saved, starting evaluation")
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — checkpoint, latest model, and replay buffer saved, starting evaluation")
 
         vs_random = evaluate_vs_opponent(model, num_simulations, "random", eval_games)
         log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — vs random: {vs_random}")
@@ -107,15 +110,36 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
     log_file.close()
 
 
+def _next_start_iteration(checkpoint_dir):
+    """Finds the highest model_iter{N}.keras already saved and returns N+1,
+    so chained resumes (e.g. re-running this script in a loop overnight)
+    number iterations correctly instead of repeatedly colliding at a fixed
+    offset."""
+    import os
+    import re
+
+    if not os.path.isdir(checkpoint_dir):
+        return 0
+    highest = -1
+    for name in os.listdir(checkpoint_dir):
+        match = re.fullmatch(r"model_iter(\d+)\.keras", name)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return highest + 1
+
+
 if __name__ == "__main__":
     import os
 
     # Resumes from final_model.keras (the last run's final checkpoint) if it
     # exists, continuing the iteration count from where it left off, instead
-    # of starting a fresh network from scratch.
+    # of starting a fresh network from scratch. start_iteration is derived
+    # from existing checkpoint files so this stays correct across repeated
+    # chained runs (e.g. looping this script overnight), not just one resume.
+    _checkpoint_dir = "./checkpoints"
     _resume_path = "./final_model.keras"
     _resume_from = _resume_path if os.path.exists(_resume_path) else None
-    _start_iteration = 15 if _resume_from else 0
+    _start_iteration = _next_start_iteration(_checkpoint_dir) if _resume_from else 0
 
     training_loop(
         num_iterations=15,
@@ -125,6 +149,7 @@ if __name__ == "__main__":
         train_steps_per_iteration=100,
         replay_maxlen=50000,
         eval_games=15,
+        checkpoint_dir=_checkpoint_dir,
         resume_from=_resume_from,
         start_iteration=_start_iteration,
     )

@@ -1,6 +1,6 @@
 import numpy as np
 from network import build_network
-from train import training_step, training_loop, save_replay_buffer, load_replay_buffer
+from train import training_step, training_loop, save_replay_buffer, load_replay_buffer, _next_start_iteration
 
 
 def test_training_step_reduces_loss_on_fixed_batch():
@@ -155,3 +155,59 @@ def test_training_loop_resume_preserves_replay_buffer_contents(tmp_path):
     # behind (plus whatever the resumed run's own self-play added), not 0
     buffer_after_resume = load_replay_buffer(str(replay_buffer_path), maxlen=100000)
     assert len(buffer_after_resume) > size_after_first_run
+
+
+def test_training_loop_updates_latest_model_path_each_iteration_for_chained_resumes(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    log_path = tmp_path / "training_log.txt"
+    latest_model_path = tmp_path / "latest.keras"
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+        latest_model_path=str(latest_model_path),
+    )
+    assert latest_model_path.exists()
+    first_mtime = latest_model_path.stat().st_mtime
+
+    # a second run resuming from latest_model_path, exactly like a chained
+    # overnight invocation would, must succeed and update it again
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+        latest_model_path=str(latest_model_path),
+        resume_from=str(latest_model_path),
+        start_iteration=1,
+    )
+    assert latest_model_path.stat().st_mtime >= first_mtime
+    assert (checkpoint_dir / "model_iter1.keras").exists()
+
+
+def test_next_start_iteration_finds_highest_existing_checkpoint(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+
+    assert _next_start_iteration(str(checkpoint_dir)) == 0
+
+    for n in [0, 1, 2, 5, 14]:
+        (checkpoint_dir / f"model_iter{n}.keras").write_bytes(b"")
+    (checkpoint_dir / "replay_buffer.pkl").write_bytes(b"")  # should be ignored
+
+    assert _next_start_iteration(str(checkpoint_dir)) == 15
+
+
+def test_next_start_iteration_returns_zero_for_missing_directory(tmp_path):
+    missing = tmp_path / "does_not_exist"
+    assert _next_start_iteration(str(missing)) == 0

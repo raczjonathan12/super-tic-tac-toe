@@ -3,7 +3,7 @@ from collections import deque
 import numpy as np
 
 from network import build_network
-from self_play import play_self_play_game
+from self_play import play_self_play_batch
 from evaluate import evaluate_vs_opponent
 
 
@@ -25,7 +25,8 @@ def training_step(model, batch):
 def training_loop(num_iterations, games_per_iteration, num_simulations, batch_size,
                    train_steps_per_iteration, replay_maxlen=20000,
                    checkpoint_dir="./checkpoints", eval_games=10,
-                   log_path="./training_log.txt"):
+                   log_path="./training_log.txt", self_play_chunk_size=5,
+                   log_every_train_steps=25):
     import os
     import time
 
@@ -42,27 +43,38 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
     start_time = time.time()
 
     for iteration in range(num_iterations):
-        for _ in range(games_per_iteration):
-            examples = play_self_play_game(model, num_simulations)
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — starting self-play ({games_per_iteration} games)")
+
+        games_played = 0
+        while games_played < games_per_iteration:
+            chunk = min(self_play_chunk_size, games_per_iteration - games_played)
+            examples = play_self_play_batch(model, chunk, num_simulations)
             replay_buffer.extend(examples)
+            games_played += chunk
+            log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — self-play {games_played}/{games_per_iteration} games, replay_buffer={len(replay_buffer)}")
 
         losses = []
-        for _ in range(train_steps_per_iteration):
+        for step in range(train_steps_per_iteration):
             if len(replay_buffer) >= batch_size:
                 batch = random.sample(replay_buffer, batch_size)
                 loss = training_step(model, batch)
                 losses.append(loss[0])
+                if (step + 1) % log_every_train_steps == 0:
+                    running_avg = sum(losses) / len(losses)
+                    log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — train step {step + 1}/{train_steps_per_iteration}, avg_loss_so_far={running_avg}")
 
         avg_loss = sum(losses) / len(losses) if losses else None
         elapsed = time.time() - start_time
         log(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
 
         model.save(f"{checkpoint_dir}/model_iter{iteration}.keras")
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — checkpoint saved, starting evaluation")
 
         vs_random = evaluate_vs_opponent(model, num_simulations, "random", eval_games)
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — vs random: {vs_random}")
+
         vs_heuristic = evaluate_vs_opponent(model, num_simulations, "heuristic", eval_games)
-        log(f"iteration {iteration} vs random: {vs_random}")
-        log(f"iteration {iteration} vs heuristic: {vs_heuristic}")
+        log(f"iteration {iteration} — {time.time() - start_time:.0f}s elapsed — vs heuristic: {vs_heuristic}")
 
     log_file.close()
 

@@ -9,3 +9,4 @@ __pycache__
 
 checkpoints/
 training_log.txt
+final_model.keras

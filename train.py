@@ -7,6 +7,9 @@ from collections import deque
 import time
 tf.config.list_physical_devices('GPU')
 buffer = deque(maxlen=50000)
+priority_buffer = deque(maxlen=10000)  # transitions with reward != 0 (wins, shaping events)
+win_buffer = deque(maxlen=2000)  # transitions with reward >= WIN_THRESHOLD (actual terminal wins only)
+WIN_THRESHOLD = 0.5
 WIN_LINES = np.array([[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]], dtype=int)
 class Game():
     def __init__(self):
@@ -94,6 +97,135 @@ class Game():
 
 
 
+class BatchGame():
+    """Vectorized equivalent of Game: holds N games' state as batched numpy
+    arrays and updates all of them per ply with array ops instead of a
+    Python loop over per-game objects. Semantics must match Game exactly —
+    see scratchpad/validate_batch_game.py."""
+    def __init__(self, num_games):
+        self.N = num_games
+        self.board = np.zeros((num_games, 9, 9, 3), dtype=int)
+        self.board[:, :, :, 0] = 1
+        self.sub_boards_status = np.zeros((num_games, 9, 4), dtype=int)
+        self.sub_boards_status[:, :, 0] = 1
+        self.sub_boards_legal = np.ones((num_games, 9), dtype=int)
+        self.current_player = np.random.randint(1, 3, size=num_games)
+        self.game_over = np.zeros(num_games, dtype=bool)
+        self.winner = np.zeros(num_games, dtype=int)  # 0 = none/draw
+
+    def legal_mask_full(self):
+        is_open = self.sub_boards_status[:, :, 0]
+        moves = is_open & self.sub_boards_legal
+        cells = self.board[:, :, :, 0]
+        legal = moves[:, :, np.newaxis] & cells
+        return legal.reshape(self.N, 81).astype(bool)
+
+    def execute_move(self, idx, actions):
+        """idx: (n,) array of game indices to update. actions: (n,) flat 0-80."""
+        n = len(idx)
+        sub_board = actions // 9
+        cell = actions % 9
+        player = self.current_player[idx]
+
+        self.board[idx, sub_board, cell, player] = 1
+        self.board[idx, sub_board, cell, 0] = 0
+
+        sub_cells = self.board[idx, sub_board, :, player]
+        sub_lines = sub_cells[:, WIN_LINES]
+        cell_win = np.all(sub_lines == 1, axis=2).any(axis=1)
+
+        sub_open_cells = self.board[idx, sub_board, :, 0]
+        sub_full = ~np.any(sub_open_cells == 1, axis=1)
+        cell_draw = (~cell_win) & sub_full
+
+        win_idx = idx[cell_win]
+        self.sub_boards_status[win_idx, sub_board[cell_win], player[cell_win]] = 1
+        self.sub_boards_status[win_idx, sub_board[cell_win], 0] = 0
+
+        draw_idx = idx[cell_draw]
+        self.sub_boards_status[draw_idx, sub_board[cell_draw], 3] = 1
+        self.sub_boards_status[draw_idx, sub_board[cell_draw], 0] = 0
+
+        resolved = cell_win | cell_draw
+        win_str = np.full(n, "ongoing", dtype=object)
+        win_str[cell_win] = "cell_win"
+        win_str[cell_draw] = "cell_draw"
+        meta_str = np.full(n, "ongoing", dtype=object)
+
+        if np.any(resolved):
+            resolved_positions = np.nonzero(resolved)[0]
+            r_idx = idx[resolved]
+            r_player = player[resolved]
+
+            meta_board = self.sub_boards_status[r_idx, :, r_player]
+            meta_lines = meta_board[:, WIN_LINES]
+            meta_win_r = np.all(meta_lines == 1, axis=2).any(axis=1)
+
+            meta_open = self.sub_boards_status[r_idx, :, 0]
+            meta_full = ~np.any(meta_open == 1, axis=1)
+            meta_draw_r = (~meta_win_r) & meta_full
+
+            meta_str[resolved_positions[meta_win_r]] = "winner"
+            meta_str[resolved_positions[meta_draw_r]] = "draw"
+
+            w_idx = r_idx[meta_win_r]
+            self.winner[w_idx] = r_player[meta_win_r]
+            self.game_over[w_idx] = True
+            d_idx = r_idx[meta_draw_r]
+            self.game_over[d_idx] = True
+
+        target_open = self.sub_boards_status[idx, cell, 0]
+        one_hot = np.zeros((n, 9), dtype=int)
+        one_hot[np.arange(n), cell] = 1
+        new_legal = np.where(target_open[:, None].astype(bool), one_hot, self.sub_boards_status[idx][:, :, 0])
+        self.sub_boards_legal[idx] = new_legal
+
+        not_over = ~self.game_over[idx]
+        flip_idx = idx[not_over]
+        self.current_player[flip_idx] = 3 - self.current_player[flip_idx]
+
+        return win_str, meta_str
+
+
+EYE9 = np.eye(9, dtype=int)
+
+def _would_win_all_actions(pattern):
+    """pattern: (n,9,9) subboard x cell occupancy for one player.
+    Returns (n,81) bool: would placing at this action complete that subboard's line."""
+    n = pattern.shape[0]
+    hyp = pattern[:, :, None, :] | EYE9[None, None, :, :]  # (n, sb, candidate_cell, cell)
+    lines = hyp[:, :, :, WIN_LINES]                         # (n, sb, candidate_cell, 8, 3)
+    win = np.all(lines == 1, axis=4).any(axis=3)            # (n, sb, candidate_cell)
+    return win.reshape(n, 81)
+
+def tactical_features_batch(mine_board, opponent_board, legal_bool):
+    """win_feat[a]=1 if playing action a now completes mover's subboard line.
+    block_feat[a]=1 if playing action a now would have completed the opponent's
+    subboard line (i.e. this action denies them that win). Both gated by legality."""
+    win_feat = _would_win_all_actions(mine_board).astype('float32') * legal_bool
+    block_feat = _would_win_all_actions(opponent_board).astype('float32') * legal_bool
+    return np.stack([win_feat, block_feat], axis=-1)
+
+def encode_state_batch(game, idx, perspective_players):
+    mine_idx = perspective_players
+    opp_idx = 3 - perspective_players
+
+    mine_board = game.board[idx, :, :, mine_idx]
+    opponent_board = game.board[idx, :, :, opp_idx]
+    mine_status = game.sub_boards_status[idx, :, mine_idx]
+    opponent_status = game.sub_boards_status[idx, :, opp_idx]
+    open_status = game.sub_boards_status[idx, :, 0]
+    draw_status = game.sub_boards_status[idx, :, 3]
+
+    array = np.stack([mine_board, opponent_board], axis=-1).astype('float32')
+    array = array.reshape(len(idx), 9, 3, 3, 2)
+    status = np.stack([open_status, mine_status, opponent_status, draw_status], axis=-1).astype('float32')
+    legal = game.sub_boards_legal[idx].astype('float32')
+    legal_bool = game.legal_mask_full()[idx].astype('float32')
+    tactical = tactical_features_batch(mine_board, opponent_board, legal_bool)
+    return array, status, legal, tactical
+
+
 def encode_state(game, perspective_player=None):
     if perspective_player is None:
         perspective_player = game.current_player
@@ -113,12 +245,15 @@ def encode_state(game, perspective_player=None):
     status = status.astype('float32')
     legal = game.sub_boards_legal
     legal = legal.astype('float32')
-    return array, status, legal
+    legal_bool = (legal_mask(game) == 0).astype('float32')
+    tactical = tactical_features_batch(mine_board[None, :, :], opponent_board[None, :, :], legal_bool[None, :])[0]
+    return array, status, legal, tactical
 
 
 board_input = keras.Input(shape=(9,3,3,2))
 status_input = keras.Input(shape=(9,4))
 legal_input = keras.Input(shape=(9,))
+tactical_input = keras.Input(shape=(81,2))
 
 output_board = layers.TimeDistributed(layers.Flatten())(board_input)
 output_board = layers.TimeDistributed(layers.Dense(64, activation='relu'))(output_board)
@@ -129,16 +264,18 @@ output_status = layers.Dense(16, activation='relu')(output_status)
 
 output_legal = layers.Dense(12, activation='relu')(legal_input)
 
+output_tactical = layers.Flatten()(tactical_input)
+output_tactical = layers.Dense(32, activation='relu')(output_tactical)
 
-output = layers.Concatenate()([output_board, output_status, output_legal])
+output = layers.Concatenate()([output_board, output_status, output_legal, output_tactical])
 output = layers.Dense(256, activation='relu')(output)
 output = layers.Dense(128, activation='relu')(output)
 output = layers.Dense(81, activation=None)(output)
 
-model = keras.Model(inputs=[board_input, status_input, legal_input], outputs=output)
+model = keras.Model(inputs=[board_input, status_input, legal_input, tactical_input], outputs=output)
 
 model.compile(
-    optimizer=keras.optimizers.Adam(learning_rate=1e-3, clipnorm=1.0),
+    optimizer=keras.optimizers.Adam(learning_rate=3e-3, clipnorm=1.0),
     loss='huber'
 )
 target_model = keras.models.clone_model(model)
@@ -164,11 +301,12 @@ def legal_mask(game):
     return mask
 
 def greedy_action(game, model):
-    board_batch, status_batch, legal_batch = encode_state(game)
+    board_batch, status_batch, legal_batch, tactical_batch = encode_state(game)
     board_batch = np.expand_dims(board_batch, axis=0)
     status_batch = np.expand_dims(status_batch, axis=0)
     legal_batch = np.expand_dims(legal_batch, axis=0)
-    pred = model([board_batch, status_batch, legal_batch]).numpy()
+    tactical_batch = np.expand_dims(tactical_batch, axis=0)
+    pred = model([board_batch, status_batch, legal_batch, tactical_batch]).numpy()
     pred = pred[0]
     mask = legal_mask(game)
     masked = pred + mask
@@ -184,11 +322,25 @@ def epsilon_greedy_action(game, model, epsilon):
         sub_board, cell = greedy_action(game, model)
     return sub_board, cell
 
-def subboard_potential(game, player):
-    opponent = 3 - player
-    mine = np.sum(game.sub_boards_status[:, player] == 1)
-    theirs = np.sum(game.sub_boards_status[:, opponent] == 1)
+def subboard_potential_batch(bg, idx, players):
+    opponent = 3 - players
+    mine = np.sum(bg.sub_boards_status[idx, :, players] == 1, axis=1)
+    theirs = np.sum(bg.sub_boards_status[idx, :, opponent] == 1, axis=1)
     return mine - theirs
+
+def heuristic_action_bg(bg, g):
+    mask = bg.legal_mask_full()[g]
+    legal_actions = np.nonzero(mask)[0]
+    player = bg.current_player[g]
+    opponent = 3 - player
+    for target in (player, opponent):
+        for a in legal_actions:
+            sb, c = a // 9, a % 9
+            cells = bg.board[g, sb, :, target].copy()
+            cells[c] = 1
+            if np.any(np.all(cells[WIN_LINES] == 1, axis=1)):
+                return a
+    return random.choice(legal_actions)
 
 def clone_snapshot(model):
     snapshot = keras.models.clone_model(model)
@@ -196,134 +348,179 @@ def clone_snapshot(model):
     return snapshot
 
 def self_play_batch(epsilon, model, buffer, num_games, opponent_pool=None, pool_fraction=0.3,
-                     heuristic_fraction=0.2, shaping_weight=0.05, gamma=0.99):
-    games = [Game() for _ in range(num_games)]
-    move_counts = [0] * num_games
-    active = list(range(num_games))
+                     heuristic_fraction=0.2, shaping_weight=0.05, gamma=0.99, priority_buffer=None, win_buffer=None):
+    bg = BatchGame(num_games)
+    move_counts = np.zeros(num_games, dtype=int)
+    active = np.arange(num_games)
 
-    pool_opponent = [None] * num_games
-    live_player = [None] * num_games
+    mode = np.zeros(num_games, dtype=int)  # 0 self-play, 1 pool, 2 heuristic
+    opponent_model_idx = np.full(num_games, -1, dtype=int)
+    live_player = np.zeros(num_games, dtype=int)
     for i in range(num_games):
         r = random.random()
         if opponent_pool and r < pool_fraction:
-            pool_opponent[i] = random.choice(opponent_pool)
+            mode[i] = 1
+            opponent_model_idx[i] = random.randrange(len(opponent_pool))
             live_player[i] = random.randint(1, 2)
         elif r < pool_fraction + heuristic_fraction:
-            pool_opponent[i] = "heuristic"
+            mode[i] = 2
             live_player[i] = random.randint(1, 2)
 
-    while active:
-        random_idx = []
-        greedy_idx = []
-        opponent_idx = []
-        for i in active:
-            if pool_opponent[i] is not None and games[i].current_player != live_player[i]:
-                opponent_idx.append(i)
-            elif random.random() < epsilon:
-                random_idx.append(i)
-            else:
-                greedy_idx.append(i)
+    while len(active) > 0:
+        current_player = bg.current_player[active]
+        is_opponent_turn = (mode[active] != 0) & (current_player != live_player[active])
+        is_live_move = ~is_opponent_turn
 
-        actions = {}
-        for i in random_idx:
-            actions[i] = random_legal_action(games[i])
-        for i in opponent_idx:
-            if pool_opponent[i] == "heuristic":
-                actions[i] = heuristic_action(games[i])
-            else:
-                actions[i] = greedy_action(games[i], pool_opponent[i])
+        heuristic_local = active[is_opponent_turn & (mode[active] == 2)]
+        pool_local = active[is_opponent_turn & (mode[active] == 1)]
+        live_local = active[is_live_move]
 
-        if greedy_idx:
-            boards, statuses, legals = [], [], []
-            for i in greedy_idx:
-                b, s, l = encode_state(games[i])
-                boards.append(b)
-                statuses.append(s)
-                legals.append(l)
-            boards = np.stack(boards, axis=0)
-            statuses = np.stack(statuses, axis=0)
-            legals = np.stack(legals, axis=0)
-            preds = model([boards, statuses, legals]).numpy()
-            for j, i in enumerate(greedy_idx):
-                mask = legal_mask(games[i])
-                masked = preds[j] + mask
-                flat_index = np.argmax(masked)
-                actions[i] = (flat_index // 9, flat_index % 9)
+        actions = np.zeros(num_games, dtype=int)
 
-        finished = []
-        for i in active:
-            game = games[i]
-            current_player = game.current_player
-            is_live_move = pool_opponent[i] is None or current_player == live_player[i]
-            state = encode_state(game, current_player)
-            phi_prev = subboard_potential(game, current_player) if is_live_move else 0
-            sub_board, cell = actions[i]
-            _, meta_win = game.execute_move(sub_board, cell)
-            move_counts[i] += 1
-            done = game.game_over
-            next_legal_mask = legal_mask(game)
-            next_state = encode_state(game, game.current_player)
-            if meta_win == "winner":
-                reward = 1
-            elif meta_win == "draw":
-                reward = 0
-            else:
-                reward = 0
-            if is_live_move:
-                phi_next = subboard_potential(game, current_player)
-                reward += shaping_weight * (gamma * phi_next - phi_prev)
-                flat_index = sub_board * 9 + cell
-                buffer.append((state, flat_index, reward, next_state, done, next_legal_mask))
-            if done or move_counts[i] >= 100:
-                if not game.game_over:
-                    print("a bug happened, needs fixing")
-                finished.append(i)
+        for g in heuristic_local:
+            actions[g] = heuristic_action_bg(bg, g)
 
-        active = [i for i in active if i not in finished]
+        if len(pool_local) > 0:
+            groups = {}
+            for g in pool_local:
+                groups.setdefault(opponent_model_idx[g], []).append(g)
+            legal_full = bg.legal_mask_full()
+            for snap_idx, games_g in groups.items():
+                games_g = np.array(games_g)
+                snap_model = opponent_pool[snap_idx]
+                boards, statuses, legals, tacticals = encode_state_batch(bg, games_g, bg.current_player[games_g])
+                preds = snap_model([boards, statuses, legals, tacticals]).numpy()
+                mask = legal_full[games_g]
+                masked = np.where(mask, preds, -1e9)
+                actions[games_g] = np.argmax(masked, axis=1)
 
-    return sum(move_counts)
+        if len(live_local) > 0:
+            rand_mask = np.random.rand(len(live_local)) < epsilon
+            random_games = live_local[rand_mask]
+            greedy_games = live_local[~rand_mask]
+            legal_full = bg.legal_mask_full()
 
-def training_step(buffer, batch_size, target_model, model, gamma=0.99):
-    sample = random.sample(buffer, batch_size)
+            if len(random_games) > 0:
+                mask = legal_full[random_games]
+                noise = np.random.rand(len(random_games), 81)
+                scores = np.where(mask, noise, -1.0)
+                actions[random_games] = np.argmax(scores, axis=1)
+
+            if len(greedy_games) > 0:
+                boards, statuses, legals, tacticals = encode_state_batch(bg, greedy_games, bg.current_player[greedy_games])
+                preds = model([boards, statuses, legals, tacticals]).numpy()
+                mask = legal_full[greedy_games]
+                masked = np.where(mask, preds, -1e9)
+                actions[greedy_games] = np.argmax(masked, axis=1)
+
+        mover = bg.current_player[active].copy()
+        state_arr, state_status, state_legal, state_tactical = encode_state_batch(bg, active, mover)
+        phi_prev = subboard_potential_batch(bg, active, mover)
+
+        action_vec = actions[active]
+        _, meta_arr = bg.execute_move(active, action_vec)
+        move_counts[active] += 1
+
+        done_arr = bg.game_over[active]
+        legal_bool = bg.legal_mask_full()[active]
+        next_legal_mask_all = np.where(legal_bool, 0.0, -1e9).astype(np.float32)
+        next_perspective = bg.current_player[active]
+        next_state_arr, next_state_status, next_state_legal, next_state_tactical = encode_state_batch(bg, active, next_perspective)
+
+        reward = np.zeros(len(active), dtype=np.float32)
+        reward[meta_arr == "winner"] = 1.0
+        phi_next = subboard_potential_batch(bg, active, mover)
+        reward += shaping_weight * (gamma * phi_next - phi_prev)
+
+        for p in range(len(active)):
+            if not is_live_move[p]:
+                continue
+            g = active[p]
+            transition = (
+                (state_arr[p], state_status[p], state_legal[p], state_tactical[p]),
+                int(action_vec[p]),
+                float(reward[p]),
+                (next_state_arr[p], next_state_status[p], next_state_legal[p], next_state_tactical[p]),
+                bool(done_arr[p]),
+                next_legal_mask_all[p],
+            )
+            buffer.append(transition)
+            if priority_buffer is not None and abs(reward[p]) > 1e-6:
+                priority_buffer.append(transition)
+            if win_buffer is not None and reward[p] >= WIN_THRESHOLD:
+                win_buffer.append(transition)
+
+        timed_out = (move_counts[active] >= 100) & (~done_arr)
+        for g in active[timed_out]:
+            print("a bug happened, needs fixing")
+        finished_mask = done_arr | timed_out
+        active = active[~finished_mask]
+
+    return int(np.sum(move_counts))
+
+def training_step(buffer, batch_size, target_model, model, gamma=0.99, priority_buffer=None, priority_fraction=0.3,
+                   win_buffer=None, win_fraction=0.2):
+    if win_buffer is not None and len(win_buffer) > 0:
+        n_win = min(int(batch_size * win_fraction), len(win_buffer))
+    else:
+        n_win = 0
+    if priority_buffer is not None and len(priority_buffer) > 0:
+        n_priority = min(int(batch_size * priority_fraction), len(priority_buffer))
+    else:
+        n_priority = 0
+    n_uniform = batch_size - n_priority - n_win
+    sample = random.sample(buffer, n_uniform)
+    if n_priority > 0:
+        sample += random.sample(priority_buffer, n_priority)
+    if n_win > 0:
+        sample += random.sample(win_buffer, n_win)
     states, actions, rewards, next_states, dones, next_legal_masks = zip(*sample)
-    boards, statuses, legals = zip(*states)
-    next_boards, next_statuses, next_legals = zip(*next_states)
+    boards, statuses, legals, tacticals = zip(*states)
+    next_boards, next_statuses, next_legals, next_tacticals = zip(*next_states)
     boards = np.stack(boards, axis=0)
     statuses = np.stack(statuses, axis=0)
     legals = np.stack(legals, axis=0)
+    tacticals = np.stack(tacticals, axis=0)
     next_legal_masks = np.stack(next_legal_masks, axis=0)
 
     next_boards = np.stack(next_boards, axis=0)
     next_statuses = np.stack(next_statuses, axis=0)
     next_legals = np.stack(next_legals, axis=0)
+    next_tacticals = np.stack(next_tacticals, axis=0)
 
     actions = np.array(actions)
     rewards = np.array(rewards)
     dones = np.array(dones)
 
-    online_next_pred = model([next_boards, next_statuses, next_legals]).numpy() + next_legal_masks
+    combined_boards = np.concatenate([boards, next_boards], axis=0)
+    combined_statuses = np.concatenate([statuses, next_statuses], axis=0)
+    combined_legals = np.concatenate([legals, next_legals], axis=0)
+    combined_tacticals = np.concatenate([tacticals, next_tacticals], axis=0)
+    combined_pred = model([combined_boards, combined_statuses, combined_legals, combined_tacticals]).numpy()
+    pred = combined_pred[:batch_size]
+    online_next_pred = combined_pred[batch_size:] + next_legal_masks
     best_next_actions = np.argmax(online_next_pred, axis=1)
-    target_pred = target_model([next_boards, next_statuses, next_legals]).numpy() + next_legal_masks
+
+    target_pred = target_model([next_boards, next_statuses, next_legals, next_tacticals]).numpy() + next_legal_masks
     next_q = target_pred[np.arange(batch_size), best_next_actions]
     target = rewards - gamma * next_q * (1 - dones)
 
-    pred = model([boards, statuses, legals]).numpy()
-
     pred[np.arange(batch_size), actions] = target
 
-    loss = model.train_on_batch([boards, statuses, legals], pred)
+    loss = model.train_on_batch([boards, statuses, legals, tacticals], pred)
     return loss
 
 
 def training_loop(epsilon, decay, episodes, model, buffer, target_model, batch_size, games_per_round=16,
-                   pool_fraction=0.3, heuristic_fraction=0.2, pool_size=5, is_kaggle=True):
+                   pool_fraction=0.3, heuristic_fraction=0.4, pool_size=5, train_decimation=4,
+                   priority_buffer=None, priority_fraction=0.3, win_buffer=None, win_fraction=0.2, is_kaggle=True):
     epsilon_floor = 0.01
     training_steps = 0
     loss = None
     start_time = time.time()
     total_games = episodes
     rounds = max(1, total_games // games_per_round)
-    checkpoint_every = max(1, rounds // 10)
+    checkpoint_every = max(1, rounds // 40)
     games_played = 0
     initial_snapshot = clone_snapshot(model)
     opponent_pool = []
@@ -333,11 +530,15 @@ def training_loop(epsilon, decay, episodes, model, buffer, target_model, batch_s
             print(f'{games_played}/{total_games} games — {elapsed:.0f}s elapsed — epsilon: {epsilon}')
         moves = self_play_batch(epsilon, model, buffer, games_per_round,
                                  opponent_pool=opponent_pool, pool_fraction=pool_fraction,
-                                 heuristic_fraction=heuristic_fraction)
+                                 heuristic_fraction=heuristic_fraction, priority_buffer=priority_buffer,
+                                 win_buffer=win_buffer)
         games_played += games_per_round
-        for move in range(moves):
+        train_calls = max(1, moves // train_decimation)
+        for _ in range(train_calls):
             if len(buffer) >= batch_size:
-                loss = training_step(buffer, batch_size, target_model, model)
+                loss = training_step(buffer, batch_size, target_model, model,
+                                      priority_buffer=priority_buffer, priority_fraction=priority_fraction,
+                                      win_buffer=win_buffer, win_fraction=win_fraction)
                 training_steps += 1
                 if training_steps % 500 == 0:
                     sync_weights(model, target_model)
@@ -352,9 +553,9 @@ def training_loop(epsilon, decay, episodes, model, buffer, target_model, batch_s
                 model.save(f'./checkpoints/model_ep{games_played}.keras')
             if loss is not None:
                 print(f'loss: {loss}')
-            print('vs random:', evaluate(model, 20))
-            print('vs heuristic:', evaluate(model, 20, opponent_action=heuristic_action))
-            print('vs initial snapshot:', evaluate(model, 20, opponent_action=lambda g: greedy_action(g, initial_snapshot)))
+            print('vs random:', evaluate_batch(model, 20, opponent='random'))
+            print('vs heuristic:', evaluate_batch(model, 20, opponent='heuristic'))
+            print('vs initial snapshot:', evaluate_batch(model, 20, opponent=initial_snapshot))
             opponent_pool.append(clone_snapshot(model))
             if len(opponent_pool) > pool_size:
                 opponent_pool.pop(0)
@@ -404,10 +605,76 @@ def evaluate(model, num_games, opponent_action=None):
         else:
             results["incomplete"] = results['incomplete'] + 1
     return results
+
+def evaluate_batch(model, num_games, opponent='random'):
+    """Vectorized equivalent of evaluate(): plays all num_games games in
+    lockstep on a BatchGame instead of one Game object at a time.
+    opponent: 'random', 'heuristic', or a keras model to play greedily."""
+    bg = BatchGame(num_games)
+    network_player = np.random.randint(1, 3, size=num_games)
+    move_counts = np.zeros(num_games, dtype=int)
+    active = np.arange(num_games)
+
+    while len(active) > 0:
+        current_player = bg.current_player[active]
+        is_network_turn = current_player == network_player[active]
+        net_idx = active[is_network_turn]
+        opp_idx = active[~is_network_turn]
+
+        actions = np.zeros(num_games, dtype=int)
+        legal_full = bg.legal_mask_full()
+
+        if len(net_idx) > 0:
+            boards, statuses, legals, tacticals = encode_state_batch(bg, net_idx, bg.current_player[net_idx])
+            preds = model([boards, statuses, legals, tacticals]).numpy()
+            mask = legal_full[net_idx]
+            masked = np.where(mask, preds, -1e9)
+            actions[net_idx] = np.argmax(masked, axis=1)
+
+        if len(opp_idx) > 0:
+            if opponent == 'random':
+                mask = legal_full[opp_idx]
+                noise = np.random.rand(len(opp_idx), 81)
+                scores = np.where(mask, noise, -1.0)
+                actions[opp_idx] = np.argmax(scores, axis=1)
+            elif opponent == 'heuristic':
+                for g in opp_idx:
+                    actions[g] = heuristic_action_bg(bg, g)
+            else:
+                boards, statuses, legals, tacticals = encode_state_batch(bg, opp_idx, bg.current_player[opp_idx])
+                preds = opponent([boards, statuses, legals, tacticals]).numpy()
+                mask = legal_full[opp_idx]
+                masked = np.where(mask, preds, -1e9)
+                actions[opp_idx] = np.argmax(masked, axis=1)
+
+        action_vec = actions[active]
+        bg.execute_move(active, action_vec)
+        move_counts[active] += 1
+
+        done_arr = bg.game_over[active]
+        timed_out = (move_counts[active] >= 100) & (~done_arr)
+        active = active[~(done_arr | timed_out)]
+
+    results = {'win': 0, 'loss': 0, 'draw': 0, 'incomplete': 0}
+    for g in range(num_games):
+        if bg.game_over[g]:
+            if bg.winner[g] == network_player[g]:
+                results['win'] += 1
+            elif bg.winner[g] == 0:
+                results['draw'] += 1
+            else:
+                results['loss'] += 1
+        else:
+            results['incomplete'] += 1
+    return results
+
 if __name__ == "__main__":
 
     start = time.time()
-    training_loop(epsilon=1.0, decay=0.9943, episodes=1000, model=model, buffer=buffer, target_model=target_model, batch_size=64, games_per_round=32, is_kaggle=True)
+    training_loop(epsilon=1.0, decay=0.999281, episodes=8000, model=model, buffer=buffer, target_model=target_model,
+                  batch_size=256, games_per_round=32, pool_fraction=0.3, heuristic_fraction=0.4,
+                  pool_size=8, train_decimation=4, priority_buffer=priority_buffer, priority_fraction=0.3,
+                  win_buffer=win_buffer, win_fraction=0.4, is_kaggle=False)
     end = time.time()
     elapsed = end - start
     print(elapsed)

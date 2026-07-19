@@ -58,12 +58,18 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
 
 
 if __name__ == "__main__":
-    # Short validation run first — confirms the pipeline produces sane data
-    # and stable loss with no correctness bugs before scaling up.
+    # Real training run, scaled up from the validated short config.
+    # num_simulations=100 (4x the validation run) gives MCTS meaningfully
+    # more search depth for both self-play data quality and evaluation
+    # accuracy, at ~4x the per-game cost. games_per_iteration=20 and
+    # num_iterations=50 target a total runtime in the same few-hour range
+    # as the earlier DQN runs, not open-ended.
     training_loop(
-        num_iterations=3,
-        games_per_iteration=4,
-        num_simulations=25,
-        batch_size=32,
-        train_steps_per_iteration=20,
+        num_iterations=50,
+        games_per_iteration=20,
+        num_simulations=100,
+        batch_size=64,
+        train_steps_per_iteration=100,
+        replay_maxlen=50000,
+        eval_games=15,
     )

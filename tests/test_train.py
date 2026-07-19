@@ -46,3 +46,42 @@ def test_training_loop_writes_log_file(tmp_path):
     assert "vs random" in content
     assert "vs heuristic" in content
     assert (checkpoint_dir / "model_iter0.keras").exists()
+
+
+def test_training_loop_can_resume_from_a_checkpoint_without_overwriting_it(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    log_path = tmp_path / "training_log.txt"
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+    )
+    first_run_checkpoint = checkpoint_dir / "model_iter0.keras"
+    assert first_run_checkpoint.exists()
+    original_mtime = first_run_checkpoint.stat().st_mtime
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+        resume_from=str(first_run_checkpoint),
+        start_iteration=1,
+    )
+
+    # the resumed run must not have overwritten the checkpoint it resumed from
+    assert first_run_checkpoint.stat().st_mtime == original_mtime
+    assert (checkpoint_dir / "model_iter1.keras").exists()
+
+    content = log_path.read_text()
+    assert "iteration 1" in content

@@ -1,6 +1,6 @@
 import numpy as np
 from network import build_network
-from train import training_step
+from train import training_step, training_loop
 
 
 def test_training_step_reduces_loss_on_fixed_batch():
@@ -23,3 +23,26 @@ def test_training_step_reduces_loss_on_fixed_batch():
 
     assert all(np.isfinite(l) for l in losses)
     assert losses[-1] < losses[0]
+
+
+def test_training_loop_writes_log_file(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    log_path = tmp_path / "training_log.txt"
+
+    training_loop(
+        num_iterations=1,
+        games_per_iteration=1,
+        num_simulations=5,
+        batch_size=4,
+        train_steps_per_iteration=2,
+        checkpoint_dir=str(checkpoint_dir),
+        eval_games=1,
+        log_path=str(log_path),
+    )
+
+    assert log_path.exists()
+    content = log_path.read_text()
+    assert "iteration 0" in content
+    assert "vs random" in content
+    assert "vs heuristic" in content
+    assert (checkpoint_dir / "model_iter0.keras").exists()

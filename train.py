@@ -24,11 +24,19 @@ def training_step(model, batch):
 
 def training_loop(num_iterations, games_per_iteration, num_simulations, batch_size,
                    train_steps_per_iteration, replay_maxlen=20000,
-                   checkpoint_dir="./checkpoints", eval_games=10):
+                   checkpoint_dir="./checkpoints", eval_games=10,
+                   log_path="./training_log.txt"):
     import os
     import time
 
     os.makedirs(checkpoint_dir, exist_ok=True)
+    log_file = open(log_path, "a")
+
+    def log(message):
+        print(message)
+        log_file.write(message + "\n")
+        log_file.flush()
+
     model = build_network()
     replay_buffer = deque(maxlen=replay_maxlen)
     start_time = time.time()
@@ -47,14 +55,16 @@ def training_loop(num_iterations, games_per_iteration, num_simulations, batch_si
 
         avg_loss = sum(losses) / len(losses) if losses else None
         elapsed = time.time() - start_time
-        print(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
+        log(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
 
         model.save(f"{checkpoint_dir}/model_iter{iteration}.keras")
 
         vs_random = evaluate_vs_opponent(model, num_simulations, "random", eval_games)
         vs_heuristic = evaluate_vs_opponent(model, num_simulations, "heuristic", eval_games)
-        print(f"iteration {iteration} vs random: {vs_random}")
-        print(f"iteration {iteration} vs heuristic: {vs_heuristic}")
+        log(f"iteration {iteration} vs random: {vs_random}")
+        log(f"iteration {iteration} vs heuristic: {vs_heuristic}")
+
+    log_file.close()
 
 
 if __name__ == "__main__":

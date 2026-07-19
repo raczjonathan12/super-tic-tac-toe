@@ -8,3 +8,4 @@ __pycache__
 .pytest_cache/
 
 checkpoints/
+training_log.txt

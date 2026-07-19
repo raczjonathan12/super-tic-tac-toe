@@ -20,3 +20,50 @@ def training_step(model, batch):
         {"value": value_targets, "policy": policy_targets},
     )
     return loss
+
+
+def training_loop(num_iterations, games_per_iteration, num_simulations, batch_size,
+                   train_steps_per_iteration, replay_maxlen=20000,
+                   checkpoint_dir="./checkpoints", eval_games=10):
+    import os
+    import time
+
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    model = build_network()
+    replay_buffer = deque(maxlen=replay_maxlen)
+    start_time = time.time()
+
+    for iteration in range(num_iterations):
+        for _ in range(games_per_iteration):
+            examples = play_self_play_game(model, num_simulations)
+            replay_buffer.extend(examples)
+
+        losses = []
+        for _ in range(train_steps_per_iteration):
+            if len(replay_buffer) >= batch_size:
+                batch = random.sample(replay_buffer, batch_size)
+                loss = training_step(model, batch)
+                losses.append(loss[0])
+
+        avg_loss = sum(losses) / len(losses) if losses else None
+        elapsed = time.time() - start_time
+        print(f"iteration {iteration} — {elapsed:.0f}s elapsed — replay_buffer={len(replay_buffer)} avg_loss={avg_loss}")
+
+        model.save(f"{checkpoint_dir}/model_iter{iteration}.keras")
+
+        vs_random = evaluate_vs_opponent(model, num_simulations, "random", eval_games)
+        vs_heuristic = evaluate_vs_opponent(model, num_simulations, "heuristic", eval_games)
+        print(f"iteration {iteration} vs random: {vs_random}")
+        print(f"iteration {iteration} vs heuristic: {vs_heuristic}")
+
+
+if __name__ == "__main__":
+    # Short validation run first — confirms the pipeline produces sane data
+    # and stable loss with no correctness bugs before scaling up.
+    training_loop(
+        num_iterations=3,
+        games_per_iteration=4,
+        num_simulations=25,
+        batch_size=32,
+        train_steps_per_iteration=20,
+    )

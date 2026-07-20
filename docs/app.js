@@ -9,6 +9,10 @@
                               // batch size 1 for the root expansion), instead
                               // of paying a one-time compile cost mid-game for
                               // a leftover partial-batch shape.
+  const MIN_THINKING_MS = 700; // floor on how long the "AI is thinking" state
+                                // is shown, so a fast search (~200ms) doesn't
+                                // make the AI's move feel like it snaps in
+                                // before the user can register it happened.
 
   UI.initRulesModal();
 
@@ -35,15 +39,22 @@
 
   UI.hideLoadingOverlay();
 
-  let game = new Game();
-  const humanPlayer = Math.random() < 0.5 ? 1 : 2;
-  // humanPlayer is independent of game.currentPlayer (which side moves
-  // first is decided separately by Game's own constructor); if the AI
-  // happens to move first, refresh() below sends it straight into
-  // runAiTurn().
+  let game, humanPlayer, lastMove, lastAiMove;
+
+  function startNewGame() {
+    game = new Game();
+    humanPlayer = Math.random() < 0.5 ? 1 : 2;
+    // humanPlayer is independent of game.currentPlayer (which side moves
+    // first is decided separately by Game's own constructor); if the AI
+    // happens to move first, refresh() below sends it straight into
+    // runAiTurn().
+    lastMove = null;
+    lastAiMove = null;
+    refresh();
+  }
 
   function refresh() {
-    UI.renderBoard(game, onHumanCellClick);
+    UI.renderBoard(game, onHumanCellClick, lastMove, lastAiMove);
     if (game.gameOver) {
       if (game.winner === humanPlayer) UI.setStatus('You win!');
       else if (game.winner) UI.setStatus('AI wins!');
@@ -60,23 +71,34 @@
       UI.setStatus('AI is thinking...');
       UI.setFigureState('robot', 'thinking');
       UI.setFigureState('human', 'idle');
-      setTimeout(runAiTurn, 30);
+      runAiTurn();
     }
   }
 
   function onHumanCellClick(subBoard, cell) {
     if (game.gameOver || game.currentPlayer !== humanPlayer) return;
     game.executeMove(subBoard, cell);
+    lastMove = { subBoard, cell };
     refresh();
   }
 
   async function runAiTurn() {
     const evaluateFn = (games) => predictBatch(model, games);
+    const searchStart = Date.now();
     const root = await runMctsLeafParallel(game, evaluateFn, NUM_SIMULATIONS, LEAF_BATCH_SIZE, 1.5);
+    const elapsed = Date.now() - searchStart;
+    if (elapsed < MIN_THINKING_MS) {
+      await new Promise((resolve) => setTimeout(resolve, MIN_THINKING_MS - elapsed));
+    }
     const action = selectAction(root, 1e-3);
-    game.executeMove(Math.floor(action / 9), action % 9);
+    const subBoard = Math.floor(action / 9), cell = action % 9;
+    game.executeMove(subBoard, cell);
+    lastMove = { subBoard, cell };
+    lastAiMove = { subBoard, cell };
     refresh();
   }
 
-  refresh();
+  document.getElementById('new-game-button').addEventListener('click', startNewGame);
+
+  startNewGame();
 })();

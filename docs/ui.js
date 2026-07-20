@@ -1,6 +1,6 @@
 (function (root) {
 
-function renderBoard(game, onCellClick) {
+function renderBoard(game, onCellClick, lastMove, lastAiMove) {
   const boardEl = document.getElementById('board');
   boardEl.innerHTML = '';
 
@@ -20,6 +20,13 @@ function renderBoard(game, onCellClick) {
       const [open, p1, p2] = game.board[sb][c];
       if (p1) { cellEl.textContent = 'X'; cellEl.classList.add('p1'); }
       else if (p2) { cellEl.textContent = 'O'; cellEl.classList.add('p2'); }
+
+      if (lastMove && lastMove.subBoard === sb && lastMove.cell === c) {
+        cellEl.classList.add('pop-in');
+      }
+      if (lastAiMove && lastAiMove.subBoard === sb && lastAiMove.cell === c) {
+        cellEl.classList.add('ai-last-move');
+      }
 
       const isLegal = legalSet.has(`${sb}-${c}`) && !game.gameOver;
       if (!isLegal) {

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Tic-Tac-Toe vs AI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loading-overlay"><p>Loading model&hellip;</p></div>
+
+<header id="hero">
+  <div id="human-figure" class="figure">
+    <div class="head"><div class="eye"></div><div class="eye"></div></div>
+  </div>
+  <h1>Ultimate Tic-Tac-Toe</h1>
+  <div id="robot-figure" class="figure">
+    <div class="head"><div class="eye"></div><div class="eye"></div></div>
+  </div>
+</header>
+
+<div id="status-banner">Loading&hellip;</div>
+
+<main id="board"></main>
+
+<button id="rules-button">Rules</button>
+
+<div id="rules-modal" class="hidden">
+  <div class="modal-content">
+    <h2>How to Play</h2>
+    <p>The board is 9 small tic-tac-toe boards arranged in a 3x3 grid. Win a small board
+    by getting three in a row inside it. Win the whole game by winning three small boards
+    in a row (a "meta" line), same pattern as regular tic-tac-toe but one level up.</p>
+    <p>Whichever cell you play in sends your opponent to the matching small board on
+    their turn (top-left cell sends them to the top-left board, and so on). If that board
+    is already won or full, they may play in any open board instead.</p>
+    <p>Only sub-boards outlined in glowing cyan are legal for your current move.</p>
+    <button id="rules-modal-close">Got it</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="game.js"></script>
+<script src="network.js"></script>
+<script src="mcts.js"></script>
+<script src="ui.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

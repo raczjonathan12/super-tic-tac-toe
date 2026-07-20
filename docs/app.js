@@ -3,8 +3,12 @@
   const { loadModel, predictBatch } = window.NetworkModule;
   const { runMctsLeafParallel, selectAction } = window.MctsModule;
 
-  const NUM_SIMULATIONS = 100;
-  const LEAF_BATCH_SIZE = 8;
+  const NUM_SIMULATIONS = 96; // multiple of LEAF_BATCH_SIZE: every MCTS round
+  const LEAF_BATCH_SIZE = 8;  // uses the same batch shape, so TF.js only ever
+                              // compiles its kernels for that one shape (plus
+                              // batch size 1 for the root expansion), instead
+                              // of paying a one-time compile cost mid-game for
+                              // a leftover partial-batch shape.
 
   UI.initRulesModal();
 
@@ -15,6 +19,20 @@
     UI.setStatus('Failed to load model: ' + err.message);
     return;
   }
+
+  // Warm up every batch shape MCTS can hand to predictBatch. Root expansion
+  // always uses batch size 1, but leaf-evaluation rounds can be smaller than
+  // LEAF_BATCH_SIZE too: whenever several simulated walks in a round hit a
+  // terminal position (common near the endgame), they need no network call,
+  // so the actual batch of leaves left to evaluate can be any size from 1 up
+  // to LEAF_BATCH_SIZE. Warming up all of them here, while the loading
+  // overlay is still showing, moves every one-time TF.js kernel-compilation
+  // cost out of the middle of a real game.
+  const warmupGame = new Game();
+  for (let size = 1; size <= LEAF_BATCH_SIZE; size++) {
+    await predictBatch(model, new Array(size).fill(warmupGame));
+  }
+
   UI.hideLoadingOverlay();
 
   let game = new Game();

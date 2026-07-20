@@ -60,6 +60,12 @@ function hideLoadingOverlay() {
   document.getElementById('loading-overlay').classList.add('hidden');
 }
 
+function setScore(score) {
+  document.getElementById('score-human').textContent = score.human;
+  document.getElementById('score-ai').textContent = score.ai;
+  document.getElementById('score-draws').textContent = score.draws;
+}
+
 function initRulesModal() {
   const modal = document.getElementById('rules-modal');
   document.getElementById('rules-button').addEventListener('click', () => {
@@ -71,6 +77,6 @@ function initRulesModal() {
   modal.classList.remove('hidden'); // show on first load
 }
 
-root.UI = { renderBoard, setStatus, setFigureState, hideLoadingOverlay, initRulesModal };
+root.UI = { renderBoard, setStatus, setFigureState, hideLoadingOverlay, initRulesModal, setScore };
 
 })(typeof window !== 'undefined' ? window : this);

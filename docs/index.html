@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ultimate Tic-Tac-Toe vs AI</title>
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -21,6 +21,12 @@
 </header>
 
 <div id="status-banner">Loading&hellip;</div>
+
+<div id="scoreboard">
+  <div class="score-entry"><span class="score-label">You</span><span id="score-human">0</span></div>
+  <div class="score-entry"><span class="score-label">Draws</span><span id="score-draws">0</span></div>
+  <div class="score-entry"><span class="score-label">AI</span><span id="score-ai">0</span></div>
+</div>
 
 <main id="board"></main>
 
@@ -49,10 +55,10 @@
      without a version bump, browsers that already cached an old copy of
      one file (e.g. app.js) can keep using it indefinitely even after a
      new deploy changes index.html itself. -->
-<script src="game.js?v=3"></script>
-<script src="network.js?v=3"></script>
-<script src="mcts.js?v=3"></script>
-<script src="ui.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="game.js?v=4"></script>
+<script src="network.js?v=4"></script>
+<script src="mcts.js?v=4"></script>
+<script src="ui.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

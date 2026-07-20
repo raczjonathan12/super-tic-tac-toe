@@ -39,7 +39,28 @@
 
   UI.hideLoadingOverlay();
 
-  let game, humanPlayer, lastMove, lastAiMove;
+  let game, humanPlayer, lastMove, lastAiMove, gameOverHandled;
+
+  const SCORE_KEY = 'super-ttt-score';
+  let score;
+  try {
+    score = JSON.parse(localStorage.getItem(SCORE_KEY)) || { human: 0, ai: 0, draws: 0 };
+  } catch (err) {
+    score = { human: 0, ai: 0, draws: 0 };
+  }
+  UI.setScore(score);
+
+  function recordResult() {
+    if (game.winner === humanPlayer) score.human++;
+    else if (game.winner) score.ai++;
+    else score.draws++;
+    UI.setScore(score);
+    try {
+      localStorage.setItem(SCORE_KEY, JSON.stringify(score));
+    } catch (err) {
+      // localStorage unavailable (e.g. private browsing); score just won't persist.
+    }
+  }
 
   function startNewGame() {
     game = new Game();
@@ -50,12 +71,17 @@
     // runAiTurn().
     lastMove = null;
     lastAiMove = null;
+    gameOverHandled = false;
     refresh();
   }
 
   function refresh() {
     UI.renderBoard(game, onHumanCellClick, lastMove, lastAiMove, game.currentPlayer === humanPlayer);
     if (game.gameOver) {
+      if (!gameOverHandled) {
+        gameOverHandled = true;
+        recordResult();
+      }
       if (game.winner === humanPlayer) UI.setStatus('You win!');
       else if (game.winner) UI.setStatus('AI wins!');
       else UI.setStatus("It's a draw!");

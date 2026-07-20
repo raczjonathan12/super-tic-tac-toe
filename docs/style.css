@@ -104,6 +104,39 @@ body {
   color: var(--text-dim);
 }
 
+/* ---------- Scoreboard ---------- */
+
+#scoreboard {
+  display: flex;
+  gap: 1.75rem;
+  padding: 0.5rem 1.5rem;
+  background: var(--panel);
+  border: 1px solid rgba(232, 244, 255, 0.1);
+  border-radius: 999px;
+}
+
+.score-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.score-entry span:last-child {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+#score-human { color: var(--accent); }
+#score-ai { color: var(--accent-2); }
+
 /* ---------- Board ---------- */
 
 #board {

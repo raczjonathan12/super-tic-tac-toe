@@ -7,7 +7,7 @@ __pycache__
 .venv_convert
 
 .pytest_cache/
-
+docs/superpowers/
 checkpoints/
 training_log.txt
 final_model.keras

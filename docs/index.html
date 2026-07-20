@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ultimate Tic-Tac-Toe vs AI</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -44,10 +44,15 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="game.js"></script>
-<script src="network.js"></script>
-<script src="mcts.js"></script>
-<script src="ui.js"></script>
-<script src="app.js"></script>
+<!-- Bump the ?v= query string on every local asset whenever any of these
+     files change. GitHub Pages doesn't set cache-busting headers, so
+     without a version bump, browsers that already cached an old copy of
+     one file (e.g. app.js) can keep using it indefinitely even after a
+     new deploy changes index.html itself. -->
+<script src="game.js?v=2"></script>
+<script src="network.js?v=2"></script>
+<script src="mcts.js?v=2"></script>
+<script src="ui.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

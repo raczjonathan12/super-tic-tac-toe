@@ -4,6 +4,7 @@ devlog.md
 
 __pycache__
 .venv
+.venv_convert
 
 .pytest_cache/
 

@@ -136,8 +136,8 @@ body {
   box-shadow: 0 0 6px var(--accent);
 }
 
-.subboard.won-1 { background: rgba(77, 243, 255, 0.14); }
-.subboard.won-2 { background: rgba(184, 102, 255, 0.14); }
+.subboard.won-1 { background: rgba(77, 243, 255, 0.22); }
+.subboard.won-2 { background: rgba(184, 102, 255, 0.22); }
 
 .cell {
   aspect-ratio: 1;

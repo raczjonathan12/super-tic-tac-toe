@@ -1,16 +1,21 @@
 (function (root) {
 
-function renderBoard(game, onCellClick, lastMove, lastAiMove) {
+function renderBoard(game, onCellClick, lastMove, lastAiMove, isHumanTurn) {
   const boardEl = document.getElementById('board');
   boardEl.innerHTML = '';
 
   const legalSet = new Set(game.legalCoords.map(([sb, c]) => `${sb}-${c}`));
   const legalSubBoards = new Set(game.legalCoords.map(([sb]) => sb));
+  // Only show legal-move highlighting and accept clicks while it's actually
+  // the human's turn -- otherwise cells stay lit up and clickable-looking
+  // during the AI's turn even though a click would silently no-op, which
+  // reads as broken rather than merely "not your turn".
+  const interactive = isHumanTurn && !game.gameOver;
 
   for (let sb = 0; sb < 9; sb++) {
     const subEl = document.createElement('div');
     subEl.className = 'subboard';
-    if (legalSubBoards.has(sb) && !game.gameOver) subEl.classList.add('legal');
+    if (interactive && legalSubBoards.has(sb)) subEl.classList.add('legal');
     if (game.subBoardsStatus[sb][1] === 1) subEl.classList.add('won-1');
     if (game.subBoardsStatus[sb][2] === 1) subEl.classList.add('won-2');
 
@@ -28,7 +33,7 @@ function renderBoard(game, onCellClick, lastMove, lastAiMove) {
         cellEl.classList.add('ai-last-move');
       }
 
-      const isLegal = legalSet.has(`${sb}-${c}`) && !game.gameOver;
+      const isLegal = interactive && legalSet.has(`${sb}-${c}`);
       if (!isLegal) {
         cellEl.classList.add('disabled');
       } else {

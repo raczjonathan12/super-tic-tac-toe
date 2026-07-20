@@ -54,7 +54,7 @@
   }
 
   function refresh() {
-    UI.renderBoard(game, onHumanCellClick, lastMove, lastAiMove);
+    UI.renderBoard(game, onHumanCellClick, lastMove, lastAiMove, game.currentPlayer === humanPlayer);
     if (game.gameOver) {
       if (game.winner === humanPlayer) UI.setStatus('You win!');
       else if (game.winner) UI.setStatus('AI wins!');

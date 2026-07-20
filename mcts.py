@@ -214,3 +214,76 @@ def run_mcts_batch(games, model, num_simulations, c_puct=1.5, dirichlet_alpha=0.
                 value = -value
 
     return roots
+
+
+def run_mcts_leaf_parallel(game, model, num_simulations, leaf_batch_size=8, c_puct=1.5,
+                            dirichlet_alpha=0.3, dirichlet_epsilon=0.25, add_noise=False):
+    """Single-game MCTS that batches leaf evaluations within one tree via
+    virtual loss, instead of run_mcts_batch's batching across many
+    simultaneous games. Each round walks the tree up to leaf_batch_size
+    times before making one network call, applying a temporary virtual
+    loss along each walk's path so consecutive walks in the same round
+    naturally spread across different leaves. Semantics (PUCT selection,
+    terminal-value convention, real backup) are identical to run_mcts;
+    this only changes how leaf evaluations are scheduled and dispatched."""
+    root = MCTSNode(prior=1.0)
+    evaluate_and_expand(root, game, model)
+
+    if add_noise:
+        _add_root_noise(root, dirichlet_alpha, dirichlet_epsilon)
+
+    simulations_done = 0
+    while simulations_done < num_simulations:
+        batch_size = min(leaf_batch_size, num_simulations - simulations_done)
+
+        paths = []
+        pending_values = [None] * batch_size
+        leaf_positions = []
+        leaf_nodes = []
+        leaf_games = []
+
+        for i in range(batch_size):
+            node = root
+            sim_game = game.clone()
+            path = [node]
+
+            while node.is_expanded() and not sim_game.game_over:
+                action, node = select_child(node, c_puct)
+                # Virtual loss: make this child look artificially good to
+                # its own mover, so select_child's q = -child.value() at
+                # the parent discourages picking it again this round.
+                node.visit_count += 1
+                node.value_sum += 1.0
+                sub_board, cell = action // 9, action % 9
+                sim_game.execute_move(sub_board, cell)
+                path.append(node)
+
+            paths.append(path)
+            terminal_value = _terminal_or_none(sim_game)
+            if terminal_value is not None:
+                pending_values[i] = terminal_value
+            else:
+                leaf_positions.append(i)
+                leaf_nodes.append(node)
+                leaf_games.append(sim_game)
+
+        if leaf_nodes:
+            values = batch_evaluate_and_expand(leaf_nodes, leaf_games, model)
+            for pos, v in zip(leaf_positions, values):
+                pending_values[pos] = v
+
+        for path, value in zip(paths, pending_values):
+            # Undo this walk's virtual loss (root, at path[0], never got
+            # any -- only nodes actually selected as a child do), then
+            # apply the real backup exactly as run_mcts does.
+            for node in path[1:]:
+                node.visit_count -= 1
+                node.value_sum -= 1.0
+            for path_node in reversed(path):
+                path_node.value_sum += value
+                path_node.visit_count += 1
+                value = -value
+
+        simulations_done += batch_size
+
+    return root

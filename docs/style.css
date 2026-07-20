@@ -31,8 +31,30 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 100;
+  overflow: hidden;
+}
+
+#loading-overlay p {
   font-size: 1.5rem;
   color: var(--accent);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  border-right: 3px solid transparent;
+  display: inline-block;
+  animation: 
+    typing 1s steps(13) forwards,
+    blink-cursor 0.75s step-end infinite;
+}
+
+@keyframes typing {
+  from { width: 0;}
+  to { width: 13ch;}
+}
+
+@keyframes blink-cursor {
+  from, to {border-color: transparent;}
+  50% {border-color: var(--accent);}
 }
 #loading-overlay.hidden { display: none; }
 
@@ -207,6 +229,13 @@ body {
   pointer-events: none;
 }
 
+.cell:not(.disabled):hover {
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  box-shadow: 0 0 8px rgba(77, 243, 255, 0.6);
+}
+
+
 /* ---------- Buttons ---------- */
 
 #button-row {
@@ -238,6 +267,7 @@ body {
 
 #rules-button { color: var(--accent); border-color: rgba(77, 243, 255, 0.35); }
 #new-game-button { color: var(--accent-2); border-color: rgba(184, 102, 255, 0.35); }
+
 
 /* ---------- Rules modal ---------- */
 
@@ -272,4 +302,8 @@ body {
   padding: 0.6rem 1.4rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+#rules-modal-close:hover {
+  background-color: #66f7ff;
 }
